@@ -12,7 +12,7 @@ pip install nvidia-cutlass-dsl
 pip install pufferlib --no-build-isolation
 pip install stable-baselines3 
 pip install wandb
-
+https://github.com/PufferAI/PufferLib.git
 
 
 git config --global user.email sathya.pranav.deepak@gmail.com
