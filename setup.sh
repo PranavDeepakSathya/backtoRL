@@ -12,6 +12,8 @@ pip install nvidia-cutlass-dsl
 pip install pufferlib --no-build-isolation
 pip install stable-baselines3 
 pip install wandb
+pip install tensorboard 
+pip install ipympl
 git clone https://github.com/PufferAI/PufferLib.git
 
 
