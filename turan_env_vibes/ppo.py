@@ -143,6 +143,9 @@ def train(cfg=CFG, resume=None):
         policy, optimizer, cfg, start_iter, global_step, best_mean_ret = \
             load_checkpoint(resume, device=str(device))
         start_iter += 1
+        cfg['total_steps'] = CFG['total_steps']
+        cfg['lr'] = CFG['lr']
+        cfg['ent_coef'] = CFG['ent_coef']
 
     steps_per_iter = cfg["n_steps"] * cfg["num_envs"]
     n_iters        = cfg["total_steps"] // steps_per_iter
