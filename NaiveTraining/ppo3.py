@@ -3,13 +3,41 @@ import torch.nn as nn
 import numpy as np
 from torch.optim import Adam
 from turan_env_c import CEnv, CHECKER_C4
+from policy import MLPActorCritic
 import os
 import time
 
 
+# ── thin wrapper so CEnv quacks exactly like BatchedTuranEnv ──────────────
+class CEnvWrapper:
+    def __init__(self, n, num_envs, checker_id=CHECKER_C4):
+        self._cenv = CEnv(n=n, num_envs=num_envs, checker_id=checker_id)
+        self.n = n
+        self.num_envs = num_envs
+        self.num_actions = n * (n - 1) // 2
+        us, vs = np.triu_indices(n, k=1)
+        self._tri_idx = (us * n + vs).astype(np.int64)
+
+    def reset(self):
+        self._cenv.reset()
+        return self._cenv.obs[:, self._tri_idx].astype(np.float32)
+
+    def step(self, actions):
+        obs_raw, reward, done = self._cenv.step(actions.astype(np.int32))
+        obs = obs_raw[:, self._tri_idx].astype(np.float32)
+        infos = [{} for _ in range(self.num_envs)]
+        return obs, reward, done, infos
+
+    def benchmark(self, steps=200):
+        self._cenv.benchmark(steps)
+
+    def close(self):
+        self._cenv.close()
+
+
 CFG = dict(
     n             = 20,
-    num_envs      = 4096,
+    num_envs      = 1024,
     checker_id    = CHECKER_C4,
     n_steps       = 64,
     n_epochs      = 10,
@@ -44,27 +72,26 @@ def compute_gae(rewards, dones, values, last_value, gamma, gae_lambda):
 
 def collect_rollout(env, policy, n_steps, device):
     num_envs = env.num_envs
-    n        = env.n
-    obs_dim  = n * n                          # CHANGED: n*n not num_actions
+    obs_dim  = env.num_actions
     obs_buf  = torch.zeros(n_steps, num_envs, obs_dim, device=device)
-    act_buf  = torch.zeros(n_steps, num_envs,           device=device, dtype=torch.long)
-    rew_buf  = torch.zeros(n_steps, num_envs,           device=device)
-    done_buf = torch.zeros(n_steps, num_envs,           device=device)
-    val_buf  = torch.zeros(n_steps, num_envs,           device=device)
-    logp_buf = torch.zeros(n_steps, num_envs,           device=device)
+    act_buf  = torch.zeros(n_steps, num_envs,          device=device, dtype=torch.long)
+    rew_buf  = torch.zeros(n_steps, num_envs,          device=device)
+    done_buf = torch.zeros(n_steps, num_envs,          device=device)
+    val_buf  = torch.zeros(n_steps, num_envs,          device=device)
+    logp_buf = torch.zeros(n_steps, num_envs,          device=device)
 
-    obs = torch.tensor(env.obs.astype(np.float32), device=device)  # CHANGED
+    obs = torch.tensor(env.reset(), device=device)
     for t in range(n_steps):
         with torch.no_grad():
             action, log_prob, _, value = policy.get_action(obs)
-        _, reward, done = env.step(action.cpu().numpy().astype(np.int32))  # CHANGED
+        next_obs_np, reward, done, _ = env.step(action.cpu().numpy())
         obs_buf[t]  = obs
         act_buf[t]  = action
         rew_buf[t]  = torch.tensor(reward, device=device)
         done_buf[t] = torch.tensor(done.astype(np.float32), device=device)
         val_buf[t]  = value
         logp_buf[t] = log_prob
-        obs = torch.tensor(env.obs.astype(np.float32), device=device)  # CHANGED
+        obs = torch.tensor(next_obs_np, device=device)
 
     with torch.no_grad():
         _, last_value = policy(obs)
@@ -119,8 +146,8 @@ def load_checkpoint(path, device=None):
     cfg       = ckpt['cfg']
     device    = device or cfg.get('device', 'cuda')
     n         = cfg['n']
-    from policy import MLPActorCritic
-    policy    = MLPActorCritic(n*n, n*(n-1)//2).to(device)  # CHANGED
+    num_act   = n * (n - 1) // 2
+    policy    = MLPActorCritic(num_act, num_act).to(device)
     optimizer = Adam(policy.parameters(), lr=cfg['lr'])
     policy.load_state_dict(ckpt['policy'])
     optimizer.load_state_dict(ckpt['optimizer'])
@@ -132,10 +159,8 @@ def train(cfg=CFG, resume=None):
     os.makedirs(cfg["checkpoint_dir"], exist_ok=True)
     device = torch.device(cfg["device"])
 
-    n         = cfg["n"]
-    env       = CEnv(n=n, num_envs=cfg["num_envs"], checker_id=cfg["checker_id"])  # CHANGED
-    from policy import MLPActorCritic
-    policy    = MLPActorCritic(n*n, n*(n-1)//2).to(device)  # CHANGED
+    env    = CEnvWrapper(n=cfg["n"], num_envs=cfg["num_envs"], checker_id=cfg["checker_id"])
+    policy = MLPActorCritic(env.num_actions, env.num_actions).to(device)
     optimizer = Adam(policy.parameters(), lr=cfg["lr"])
 
     start_iter    = 1
@@ -148,8 +173,8 @@ def train(cfg=CFG, resume=None):
             load_checkpoint(resume, device=str(device))
         start_iter += 1
         cfg['total_steps'] = CFG['total_steps']
-        cfg['lr']          = CFG['lr']
-        cfg['ent_coef']    = CFG['ent_coef']
+        cfg['lr'] = CFG['lr']
+        cfg['ent_coef'] = CFG['ent_coef']
 
     steps_per_iter = cfg["n_steps"] * cfg["num_envs"]
     n_iters        = cfg["total_steps"] // steps_per_iter
@@ -171,32 +196,32 @@ def train(cfg=CFG, resume=None):
         advantages, returns = compute_gae(
             rew_buf, done_buf, val_buf, last_val, cfg["gamma"], cfg["gae_lambda"])
 
-        flat  = lambda t: t.reshape(-1, *t.shape[2:])
-        stats = ppo_update(policy, optimizer,
-                           flat(obs_buf), flat(act_buf),
-                           flat(advantages), flat(returns), flat(logp_buf), cfg)
+        flat   = lambda t: t.reshape(-1, *t.shape[2:])
+        stats  = ppo_update(policy, optimizer,
+                             flat(obs_buf), flat(act_buf),
+                             flat(advantages), flat(returns), flat(logp_buf), cfg)
 
         global_step  += steps_per_iter
         mean_ret      = returns.mean().item()
-        terminal_mask = done_buf.bool()
-        mean_term_ret = rew_buf[terminal_mask].mean().item() if terminal_mask.any() else 0.0
         fps           = steps_per_iter / (time.time() - t_iter)
 
         history.append(dict(iteration=iteration, global_step=global_step,
-                            mean_ret=mean_ret, mean_term_ret=mean_term_ret, **stats))
+                            mean_ret=mean_ret, **stats))
 
-        if mean_term_ret > best_mean_ret:
-            best_mean_ret = mean_term_ret
-            save_checkpoint(f"{cfg['checkpoint_dir']}/best.pt",
-                            policy, optimizer, cfg, iteration, global_step, best_mean_ret)
+        if mean_ret > best_mean_ret:
+            best_mean_ret = mean_ret
+            save_checkpoint(
+                f"{cfg['checkpoint_dir']}/best.pt",
+                policy, optimizer, cfg, iteration, global_step, best_mean_ret)
 
         if iteration % cfg["save_interval"] == 0:
-            save_checkpoint(f"{cfg['checkpoint_dir']}/ckpt_{global_step//1000}k.pt",
-                            policy, optimizer, cfg, iteration, global_step, best_mean_ret)
+            save_checkpoint(
+                f"{cfg['checkpoint_dir']}/ckpt_{global_step//1000}k.pt",
+                policy, optimizer, cfg, iteration, global_step, best_mean_ret)
 
         if iteration % cfg["log_interval"] == 0:
             print(f"iter {iteration:5d} | steps {global_step/1e6:.2f}M | "
-                  f"fps {fps:6,.0f} | ret {mean_ret:.2f} | term {mean_term_ret:.2f} | best {best_mean_ret:.2f} | "
+                  f"fps {fps:6,.0f} | ret {mean_ret:.2f} | best {best_mean_ret:.2f} | "
                   f"pg {stats['pg']:.4f} | vf {stats['vf']:.3f} | "
                   f"ent {stats['ent']:.3f} | clip {stats['clip']:.3f} | "
                   f"t {time.time()-t_start:.0f}s")
@@ -206,3 +231,7 @@ def train(cfg=CFG, resume=None):
     print(f"\ndone. best return: {best_mean_ret:.2f}")
     env.close()
     return policy, history
+
+
+if __name__ == "__main__":
+    train()

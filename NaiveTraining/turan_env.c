@@ -124,7 +124,6 @@ static int check_k23(uint64_t* packed, int n, int rows, int u, int v) {
 
 static int check_theta123(uint64_t* packed, int n, int rows, int u, int v) {
   // case1: u,v are poles
-  // need common neighbor w1, and w2-w3 edge where w2 nbr of u, w3 nbr of v, all distinct
   for (int w1 = 0; w1 < n; w1++) {
     if (w1 == u || w1 == v) continue;
     if (!BIT(packed + u*rows, w1) || !BIT(packed + v*rows, w1)) continue;
@@ -140,7 +139,6 @@ static int check_theta123(uint64_t* packed, int n, int rows, int u, int v) {
   }
 
   // case2: (u,v) is internal edge of length-2 path
-  // for each common neighbor p of u,v (pole), find w1 nbr of p, w2 nbr of v (or u), edge w1-w2
   for (int p = 0; p < n; p++) {
     if (p == u || p == v) continue;
     if (!BIT(packed + u*rows, p) || !BIT(packed + v*rows, p)) continue;
@@ -155,8 +153,7 @@ static int check_theta123(uint64_t* packed, int n, int rows, int u, int v) {
     }
   }
 
-  // case3a: (u,v) is middle edge of length-3 path: w1-u-v-w2
-  // poles w1,w2 need: edge w1-w2, common neighbor outside {u,v}
+  // case3a: (u,v) is middle edge of length-3 path
   for (int w1 = 0; w1 < n; w1++) {
     if (w1 == u || w1 == v) continue;
     if (!BIT(packed + u*rows, w1)) continue;
@@ -171,8 +168,7 @@ static int check_theta123(uint64_t* packed, int n, int rows, int u, int v) {
     }
   }
 
-  // case3b: (u,v) is first edge: u-v-m1-m2, poles (u,m2)
-  // need edge u-m2 and common neighbor of u,m2 outside {v,m1}
+  // case3b: (u,v) is first edge
   for (int m1 = 0; m1 < n; m1++) {
     if (m1 == u || m1 == v) continue;
     if (!BIT(packed + v*rows, m1)) continue;
@@ -187,7 +183,7 @@ static int check_theta123(uint64_t* packed, int n, int rows, int u, int v) {
     }
   }
 
-  // case3b symmetric: (u,v) is last edge: m2-m1-u-v, poles (v,m2)
+  // case3b symmetric: (u,v) is last edge
   for (int m1 = 0; m1 < n; m1++) {
     if (m1 == u || m1 == v) continue;
     if (!BIT(packed + u*rows, m1)) continue;
@@ -207,8 +203,6 @@ static int check_theta123(uint64_t* packed, int n, int rows, int u, int v) {
 
 static int check_bull(uint64_t* packed, int n, int rows, int u, int v) {
   // case1: (u,v) is pendant edge
-  // for each edge (a,b) not involving u,v: if u or v is common neighbor,
-  // check if a or b has external neighbor
   for (int a = 0; a < n; a++) {
     if (a == u || a == v) continue;
     for (int b = a+1; b < n; b++) {
@@ -230,7 +224,6 @@ static int check_bull(uint64_t* packed, int n, int rows, int u, int v) {
   }
 
   // case2: (u,v) is triangle edge
-  // find common neighbor w, for each triangle edge (a,b) find P3 with ends outside triangle
   for (int w = 0; w < n; w++) {
     if (w == u || w == v) continue;
     if (!BIT(packed + u*rows, w) || !BIT(packed + v*rows, w)) continue;
@@ -270,7 +263,6 @@ static int check_bowtie(uint64_t* packed, int n, int rows, int u, int v) {
   return 0;
 }
 
-
 static int check_k4(uint64_t* packed, int n, int rows, int u, int v) {
   for (int p = 0; p < n; p++) {
     if (p == u || p == v) continue;
@@ -302,7 +294,7 @@ static CheckerFn get_checker(int checker_id) {
   }
 }
 
-// ── step ─────────────────────────────────────────────────────────────────────
+// ── step (with edge toggling) ────────────────────────────────────────────────
 
 void env_step(Env* env, int* actions, int checker_id) {
   int n        = env->n;
@@ -313,7 +305,7 @@ void env_step(Env* env, int* actions, int checker_id) {
   #pragma omp parallel for schedule(static)
   for (int e = 0; e < num_envs; e++) {
     if (env->done[e]) {
-      env->reward[e] = 0.0f;  // clear stale reward
+      env->reward[e] = 0.0f;
       continue;
     }
 
@@ -322,10 +314,20 @@ void env_step(Env* env, int* actions, int checker_id) {
     uint64_t* packed = get_packed(env, e);
     uint8_t*  obs    = get_obs(env, e);
 
-    if (checker(packed, n, rows, u, v)) {
+    if (BIT(packed + u*rows, v)) {
+      /* ── edge exists → REMOVE (toggle off) ── */
+      obs[u*n + v] = 0;
+      obs[v*n + u] = 0;
+      CLR(packed + u*rows, v);
+      CLR(packed + v*rows, u);
+      env->edge_count[e]--;
+      env->reward[e] = -0.01f;
+    } else if (checker(packed, n, rows, u, v)) {
+      /* ── adding would create forbidden subgraph → TERMINAL ── */
       env->done[e]   = 1;
       env->reward[e] = (float)env->edge_count[e];
     } else {
+      /* ── safe addition ── */
       obs[u*n + v] = 1;
       obs[v*n + u] = 1;
       SET(packed + u*rows, v);
@@ -343,9 +345,9 @@ void destroy(Env* env)             { env_destroy(env); }
 void reset_all(Env* env)           { env_reset_all(env); }
 void reset_single(Env* env, int e) { env_reset_single(env, e); }
 
-uint8_t* obs_ptr(Env* env)     { return env->obs; }
-float*   reward_ptr(Env* env)  { return env->reward; }
-int*     done_ptr(Env* env)    { return env->done; }
+uint8_t* obs_ptr(Env* env)        { return env->obs; }
+float*   reward_ptr(Env* env)     { return env->reward; }
+int*     done_ptr(Env* env)       { return env->done; }
 int*     edge_count_ptr(Env* env) { return env->edge_count; }
 void step(Env* env, int* actions, int checker_id) {
   env_step(env, actions, checker_id);

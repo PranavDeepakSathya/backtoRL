@@ -1,0 +1,28 @@
+/root/backtoRL/.venv/lib/python3.12/site-packages/torch/cuda/__init__.py:65: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+=== Manual C4 sequence ===
+/root/backtoRL/NaiveTraining/test_envs.py:27: DeprecationWarning: Conversion of an array with ndim > 0 to a scalar is deprecated, and will error in future. Ensure you extract a single element from your array before performing this operation. (Deprecated NumPy 1.25.)
+  return int(np.where(mask)[0])
+  edge (0,1): batched_rew=-0.01 c_rew=-0.01 batched_done=False c_done=False rew_match=True done_match=True obs_match=True
+  edge (1,2): batched_rew=-0.01 c_rew=-0.01 batched_done=False c_done=False rew_match=True done_match=True obs_match=True
+  edge (2,3): batched_rew=-0.01 c_rew=-0.01 batched_done=False c_done=False rew_match=True done_match=True obs_match=True
+  edge (0,3): batched_rew=+3.00 c_rew=+3.00 batched_done=True c_done=True rew_match=True done_match=True obs_match=True
+
+=== Toggle test (add then remove) ===
+/root/backtoRL/NaiveTraining/test_envs.py:73: DeprecationWarning: Conversion of an array with ndim > 0 to a scalar is deprecated, and will error in future. Ensure you extract a single element from your array before performing this operation. (Deprecated NumPy 1.25.)
+  return int(np.where(mask)[0])
+  ADD (0,1): b_rew=-0.01 c_rew=-0.01 b_done=False c_done=False obs_match=True
+  REM (0,1): b_rew=-0.01 c_rew=-0.01 b_done=False c_done=False obs_match=True
+  edges after toggle: batched=0.0 c_env=0
+
+=== Random trajectory test: 2000 steps x 64 envs ===
+
+  Total mismatched steps: 0/2000
+  Total dones: batched=6652 c_env=6652
+  Max terminal reward: batched=30 c_env=30
+
+  ✓ ENVS ARE IDENTICAL — no bug in env logic.
+  The training difference is a hyperparameter/stability issue, not a bug.

@@ -72,21 +72,27 @@ class CEnv:
     self._env = self._lib.create(n, num_envs)
 
     # zero copy numpy views into C buffers
-    obs_raw    = self._lib.obs_ptr(self._env)
-    rew_raw    = self._lib.reward_ptr(self._env)
-    done_raw   = self._lib.done_ptr(self._env)
-    ec_raw = self._lib.edge_count_ptr(self._env)
+    obs_raw  = self._lib.obs_ptr(self._env)
+    rew_raw  = self._lib.reward_ptr(self._env)
+    done_raw = self._lib.done_ptr(self._env)
+    ec_raw   = self._lib.edge_count_ptr(self._env)
         
-    self.obs    = np.frombuffer((ctypes.c_uint8 * (num_envs*n*n)).from_address(
-                    ctypes.addressof(obs_raw.contents)), dtype=np.uint8
-                  ).reshape(num_envs, n*n)
-    self.reward = np.frombuffer((ctypes.c_float * num_envs).from_address(
-                    ctypes.addressof(rew_raw.contents)), dtype=np.float32)
-    self.done   = np.frombuffer((ctypes.c_int * num_envs).from_address(
-                    ctypes.addressof(done_raw.contents)), dtype=np.int32)
+    self.obs = np.frombuffer(
+        (ctypes.c_uint8 * (num_envs * n * n)).from_address(
+            ctypes.addressof(obs_raw.contents)), dtype=np.uint8
+    ).reshape(num_envs, n * n)
 
-    self.edge_count = np.frombuffer((ctypes.c_int * num_envs).from_address(
-        ctypes.addressof(ec_raw.contents)), dtype=np.int32)
+    self.reward = np.frombuffer(
+        (ctypes.c_float * num_envs).from_address(
+            ctypes.addressof(rew_raw.contents)), dtype=np.float32)
+
+    self.done = np.frombuffer(
+        (ctypes.c_int * num_envs).from_address(
+            ctypes.addressof(done_raw.contents)), dtype=np.int32)
+
+    self.edge_count = np.frombuffer(
+        (ctypes.c_int * num_envs).from_address(
+            ctypes.addressof(ec_raw.contents)), dtype=np.int32)
 
     # precompute upper triangle edge index → (u,v)
     us, vs = np.triu_indices(n, k=1)
@@ -96,26 +102,42 @@ class CEnv:
     self.reset()
 
   def step(self, actions):
-    u  = self._edge_u[actions].astype(np.int32)
-    v  = self._edge_v[actions].astype(np.int32)
+    """
+    actions: (num_envs,) int array of edge indices in [0, num_actions).
+    
+    MDP semantics (matching BatchedTuranEnv):
+      - If edge already exists  → remove it, reward = -0.01
+      - If adding creates forbidden subgraph → done=True, reward = edge_count
+      - Otherwise → add edge, reward = -0.01
+    Auto-resets done envs.
+    """
+    u = self._edge_u[actions].astype(np.int32)
+    v = self._edge_v[actions].astype(np.int32)
     uv = np.stack([u, v], axis=1).ravel().copy()
     uv_ptr = uv.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
+
     self._lib.step(self._env, uv_ptr, self.checker_id)
+
+    # snapshot before auto-reset
     done        = self.done.copy().astype(bool)
-    edge_counts = self.edge_count.copy()  # snapshot BEFORE reset
-    reward      = np.where(done, edge_counts.astype(np.float32), self.reward)
+    edge_counts = self.edge_count.copy()
+    # C sets reward = edge_count on done, -0.01 otherwise; mirror that
+    reward = np.where(done, edge_counts.astype(np.float32), self.reward.copy())
+
+    # auto-reset terminated envs
     for e in np.where(done)[0]:
-        self._lib.reset_single(self._env, int(e))
+      self._lib.reset_single(self._env, int(e))
+
     return self.obs.copy(), reward, done
 
   def reset(self):
     self._lib.reset_all(self._env)
-    return self.obs, self.reward, self.done.astype(bool)
+    return self.obs.copy(), self.reward.copy(), self.done.copy().astype(bool)
         
-  
   def close(self):
-    self._lib.destroy(self._env)
-    self._env = None
+    if self._env is not None:
+      self._lib.destroy(self._env)
+      self._env = None
 
   def benchmark(self, steps=500):
     import time
