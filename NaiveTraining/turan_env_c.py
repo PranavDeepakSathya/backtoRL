@@ -101,8 +101,9 @@ class CEnv:
     uv = np.stack([u, v], axis=1).ravel().copy()
     uv_ptr = uv.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
     self._lib.step(self._env, uv_ptr, self.checker_id)
-    done   = self.done.copy().astype(bool)
-    reward = np.where(done, self.edge_count.astype(np.float32), self.reward)
+    done        = self.done.copy().astype(bool)
+    edge_counts = self.edge_count.copy()  # snapshot BEFORE reset
+    reward      = np.where(done, edge_counts.astype(np.float32), self.reward)
     for e in np.where(done)[0]:
         self._lib.reset_single(self._env, int(e))
     return self.obs.copy(), reward, done

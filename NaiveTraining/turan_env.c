@@ -312,7 +312,10 @@ void env_step(Env* env, int* actions, int checker_id) {
 
   #pragma omp parallel for schedule(static)
   for (int e = 0; e < num_envs; e++) {
-    if (env->done[e]) continue;
+    if (env->done[e]) {
+      env->reward[e] = 0.0f;  // clear stale reward
+      continue;
+    }
 
     int u = actions[e * 2];
     int v = actions[e * 2 + 1];
