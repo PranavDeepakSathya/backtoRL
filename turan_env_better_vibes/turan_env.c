@@ -343,6 +343,7 @@ void reset_single(Env* env, int e) { env_reset_single(env, e); }
 uint8_t* obs_ptr(Env* env)     { return env->obs; }
 float*   reward_ptr(Env* env)  { return env->reward; }
 int*     done_ptr(Env* env)    { return env->done; }
+int* edge_count_ptr(Env* env) { return env->edge_count; }
 
 void step(Env* env, int* actions, int checker_id) {
   env_step(env, actions, checker_id);
