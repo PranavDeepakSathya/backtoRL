@@ -23,12 +23,14 @@ class MLPActorCritic(nn.Module):
 
     def get_action(self, obs, deterministic=False):
         logits, value = self(obs)
+        logits = logits.masked_fill(obs.bool(), float('-inf'))
         dist   = Categorical(logits=logits)
         action = dist.mode if deterministic else dist.sample()
         return action, dist.log_prob(action), dist.entropy(), value
 
     def evaluate(self, obs, actions):
         logits, value = self(obs)
+        logits   = logits.masked_fill(obs.bool(), float('-inf'))
         dist     = Categorical(logits=logits)
         log_prob = dist.log_prob(actions)
         entropy  = dist.entropy()

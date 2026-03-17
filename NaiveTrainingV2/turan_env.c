@@ -326,23 +326,19 @@ void env_step(Env* env, int* actions, int checker_id) {
     int       eidx   = edge_idx(n, u, v);
 
     if (BIT(packed + u*rows, v)) {
-      /* ── edge exists → REMOVE (toggle off) ── */
-      obs[eidx] = 0;
-      CLR(packed + u*rows, v);
-      CLR(packed + v*rows, u);
-      env->edge_count[e]--;
+      /* ── edge exists → NO-OP ── */
       env->reward[e] = 0.0f;
     } else if (checker(packed, n, rows, u, v)) {
       /* ── adding would create forbidden subgraph → TERMINAL ── */
       env->done[e]   = 1;
-      env->reward[e] = (float)env->edge_count[e];
+      env->reward[e] = 0.0f;
     } else {
-      /* ── safe addition ── */
+      /* ── safe addition: dense +1 reward ── */
       obs[eidx] = 1;
       SET(packed + u*rows, v);
       SET(packed + v*rows, u);
       env->edge_count[e]++;
-      env->reward[e] = -0.01f;
+      env->reward[e] = 1.0f;
     }
   }
 }
