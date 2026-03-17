@@ -155,6 +155,42 @@ def load_checkpoint(path, device=None):
     return policy, optimizer, cfg, ckpt['iteration'], ckpt['global_step'], ckpt['best_mean_ret']
 
 
+def run_episodes(policy, cfg, n_episodes=1, deterministic=True):
+    n      = cfg['n']
+    device = cfg['device']
+    env    = CEnvWrapper(n=n, num_envs=n_episodes, checker_id=cfg['checker_id'])
+    obs    = env.reset()
+    done_all = np.zeros(n_episodes, dtype=bool)
+    last_obs = np.zeros((n_episodes, env.num_actions), dtype=np.float32)
+    max_steps = env.num_actions + 10
+    step = 0
+    while not done_all.all() and step < max_steps:
+        obs_t = torch.tensor(obs, device=device)
+        with torch.no_grad():
+            logits, _ = policy(obs_t)
+            logits[obs_t.bool()] = -1e9          # mask already-added edges
+            action = logits.argmax(dim=-1) if deterministic else \
+                     torch.distributions.Categorical(logits=logits).sample()
+        obs, _, done_arr, _ = env.step(action.cpu().numpy().astype(np.int32))
+        newly_done = done_arr & ~done_all
+        for e in np.where(newly_done)[0]:
+            last_obs[e] = obs_t[e].cpu().numpy()
+        done_all |= done_arr
+        step += 1
+    for e in np.where(~done_all)[0]:
+        last_obs[e] = obs_t[e].cpu().numpy()
+    env.close()
+    # reconstruct symmetric n×n adjacency from upper-triangle obs
+    us, vs = np.triu_indices(n, k=1)
+    adjs = []
+    for e in range(n_episodes):
+        adj = np.zeros((n, n), dtype=np.float32)
+        adj[us, vs] = last_obs[e]
+        adj[vs, us] = last_obs[e]
+        adjs.append(adj)
+    return adjs
+
+
 def train(cfg=CFG, resume=None):
     os.makedirs(cfg["checkpoint_dir"], exist_ok=True)
     device = torch.device(cfg["device"])
