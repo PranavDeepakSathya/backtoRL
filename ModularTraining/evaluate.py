@@ -33,8 +33,11 @@ CHECKER_NAMES = {
 
 def load_policy(checkpoint_path, policy_name, device="cuda", **policy_kwargs):
     """Load a trained policy from a checkpoint file."""
-    policy = make_policy(policy_name, **policy_kwargs)
     ckpt = torch.load(checkpoint_path, map_location="cpu")
+    if "obs_dim" not in policy_kwargs and "env_n" in ckpt:
+        n = ckpt["env_n"]
+        policy_kwargs["obs_dim"] = n * (n - 1) // 2
+    policy = make_policy(policy_name, **policy_kwargs)
     policy.load_state_dict(ckpt["policy"])
     policy = policy.to(device).eval()
     info = {k: ckpt.get(k) for k in
